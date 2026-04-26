@@ -1,0 +1,177 @@
+{
+  "name": "05 - Sales Agent (Email Lead Qualification)",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": { "item": [{ "mode": "everyMinute" }] },
+        "mailbox": "INBOX",
+        "options": { "allowUnauthorizedCerts": false }
+      },
+      "id": "node-email-trigger",
+      "name": "IMAP — Email Trigger (New Inbox)",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "notes": "Polls Gmail/IMAP inbox every minute for new emails. Configure IMAP credentials in n8n Credentials. For Gmail: enable IMAP in Gmail settings and use App Password."
+    },
+    {
+      "parameters": {
+        "jsCode": "const email = $input.item.json;\n\n// Extract key fields\nconst from = email.from || '';\nconst subject = email.subject || '';\nconst textBody = email.text || email.html?.replace(/<[^>]*>/g, '') || '';\nconst senderEmail = from.match(/[\\w.-]+@[\\w.-]+\\.[a-z]+/i)?.[0] || '';\nconst senderName = from.replace(/<.*>/,'').trim();\n\n// Basic scoring heuristics (before AI classification)\nconst keywords_high = ['villa', 'property', 'automated', 'integration', 'booking system', 'sistem', 'otomasi', 'properti', 'investasi', 'serius'];\nconst keywords_low = ['unsubscribe', 'newsletter', 'promo', 'spam', 'test'];\n\nconst bodyLower = (subject + ' ' + textBody).toLowerCase();\nconst highScore = keywords_high.filter(k => bodyLower.includes(k)).length;\nconst lowScore = keywords_low.filter(k => bodyLower.includes(k)).length;\nconst preScore = lowScore > 0 ? 0 : highScore;\n\nreturn [{\n  json: {\n    senderEmail,\n    senderName,\n    subject,\n    textBody: textBody.slice(0, 2000), // truncate for AI\n    preScore,\n    receivedAt: email.date || new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node-parse-email",
+      "name": "Code — Parse Email Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300],
+      "notes": "Extracts sender info, subject, and body. Applies basic keyword pre-scoring before sending to AI for classification."
+    },
+    {
+      "parameters": {
+        "resource": "text",
+        "operation": "message",
+        "model": "gpt-4o-mini",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a lead qualification specialist for a property automation agency. Classify incoming emails and respond with JSON only.\n\nClassification criteria:\n- HIGH: Owner/manager of villa or property, asking about automation services, shows business intent\n- MEDIUM: Interested but vague, or could be a good prospect with more info\n- LOW: Not relevant, spam, unsubscribe, or completely off-topic\n\nRespond with this exact JSON format:\n{\n  \"quality\": \"HIGH|MEDIUM|LOW\",\n  \"businessType\": \"villa owner|property manager|agency|other|unknown\",\n  \"intent\": \"one sentence describing what they want\",\n  \"numProperties\": estimated number or null,\n  \"qualificationQuestions\": [\"question 1\", \"question 2\"] // 2 questions to ask\n}"
+            },
+            {
+              "role": "user",
+              "content": "=From: {{ $json.senderName }} <{{ $json.senderEmail }}>\nSubject: {{ $json.subject }}\n\n{{ $json.textBody }}"
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 500,
+          "temperature": 0.3
+        }
+      },
+      "id": "node-openai-classify",
+      "name": "OpenAI — Classify Lead Quality",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1,
+      "position": [680, 300],
+      "notes": "Uses GPT-4o-mini to classify the email and extract business intent. Configure OpenAI credentials in n8n. Set OPENAI_API_KEY env var."
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.item.json.message?.content || '{}';\nlet classification;\ntry {\n  // Extract JSON from potential markdown code block\n  const jsonMatch = raw.match(/```json\\n?([\\s\\S]*?)\\n?```/) || raw.match(/(\\{[\\s\\S]*\\})/);\n  classification = JSON.parse(jsonMatch ? jsonMatch[1] : raw);\n} catch(e) {\n  classification = { quality: 'MEDIUM', businessType: 'unknown', intent: 'Could not parse', qualificationQuestions: [] };\n}\n\nreturn [{\n  json: {\n    ...$input.item.json,\n    quality: classification.quality,\n    businessType: classification.businessType,\n    intent: classification.intent,\n    numProperties: classification.numProperties,\n    qualificationQuestions: classification.qualificationQuestions || []\n  }\n}];"
+      },
+      "id": "node-parse-ai-response",
+      "name": "Code — Parse AI Classification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300],
+      "notes": "Parses the AI JSON response and merges classification fields into the item."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-high",
+              "leftValue": "={{ $json.quality }}",
+              "rightValue": "HIGH",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "node-if-quality",
+      "name": "IF — High Quality Lead?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1120, 300],
+      "notes": "True: HIGH quality → send personalized reply + add to pipeline. False: MEDIUM/LOW → send nurture or ignore."
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.AGENCY_EMAIL }}",
+        "toEmail": "={{ $json.senderEmail }}",
+        "subject": "=Re: {{ $json.subject }}",
+        "emailFormat": "text",
+        "text": "=Halo {{ $json.senderName }},\n\nTerima kasih sudah menghubungi PropertyFollow! Kami sangat senang mendengar Anda tertarik dengan sistem automasi properti.\n\nBerdasarkan pesan Anda, kami ingin memahami kebutuhan Anda lebih baik:\n\n1. {{ $json.qualificationQuestions[0] }}\n2. {{ $json.qualificationQuestions[1] }}\n\nSetelah mendapatkan informasi ini, kami akan menyiapkan proposal yang sesuai untuk bisnis Anda.\n\nAlternatif: Anda juga bisa langsung booking konsultasi gratis 30 menit dengan kami: [CALENDLY_LINK]\n\nSalam,\nTim PropertyFollow\n{{ $env.ADMIN_PHONE }}"
+      },
+      "id": "node-reply-high",
+      "name": "Email — Reply to High Quality Lead",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1340, 160],
+      "notes": "Sends a personalized qualification reply to high-quality leads. Uses AI-generated questions. Env: AGENCY_EMAIL."
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": { "value": "={{ $env.GOOGLE_SHEET_ID }}" },
+        "sheetName": { "value": "Pipeline" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Email": "={{ $json.senderEmail }}",
+            "Name": "={{ $json.senderName }}",
+            "BusinessType": "={{ $json.businessType }}",
+            "Intent": "={{ $json.intent }}",
+            "Quality": "={{ $json.quality }}",
+            "NumProperties": "={{ $json.numProperties }}",
+            "Stage": "new",
+            "CreatedAt": "={{ $now.toISO() }}"
+          }
+        },
+        "options": { "upsertColumn": "Email" }
+      },
+      "id": "node-save-to-pipeline",
+      "name": "Google Sheets — Add to Sales Pipeline",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1560, 160],
+      "notes": "Saves high-quality leads to the Pipeline sheet for sales team follow-up."
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.AGENCY_EMAIL }}",
+        "toEmail": "={{ $json.senderEmail }}",
+        "subject": "=Re: {{ $json.subject }}",
+        "emailFormat": "text",
+        "text": "=Halo {{ $json.senderName }},\n\nTerima kasih sudah menghubungi PropertyFollow!\n\nKami adalah agensi yang membantu villa dan properti di Bali & Lombok mengotomasi operasional mereka — dari WhatsApp auto-reply, sinkronisasi kalender, hingga manajemen tamu.\n\nJika Anda tertarik untuk mengetahui lebih lanjut, silakan kunjungi: [WEBSITE_URL]\n\nAda pertanyaan? Balas email ini kapan saja.\n\nSalam,\nTim PropertyFollow"
+      },
+      "id": "node-reply-nurture",
+      "name": "Email — Send Nurture Reply (Medium/Low)",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1340, 440],
+      "notes": "Sends a general brand-awareness reply to medium/low quality leads. Keeps them warm without over-investing time."
+    }
+  ],
+  "connections": {
+    "IMAP — Email Trigger (New Inbox)": {
+      "main": [[{ "node": "Code — Parse Email Content", "type": "main", "index": 0 }]]
+    },
+    "Code — Parse Email Content": {
+      "main": [[{ "node": "OpenAI — Classify Lead Quality", "type": "main", "index": 0 }]]
+    },
+    "OpenAI — Classify Lead Quality": {
+      "main": [[{ "node": "Code — Parse AI Classification", "type": "main", "index": 0 }]]
+    },
+    "Code — Parse AI Classification": {
+      "main": [[{ "node": "IF — High Quality Lead?", "type": "main", "index": 0 }]]
+    },
+    "IF — High Quality Lead?": {
+      "main": [
+        [{ "node": "Email — Reply to High Quality Lead", "type": "main", "index": 0 }],
+        [{ "node": "Email — Send Nurture Reply (Medium/Low)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Email — Reply to High Quality Lead": {
+      "main": [[{ "node": "Google Sheets — Add to Sales Pipeline", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "error-handler-workflow"
+  },
+  "tags": ["internal", "sales", "email", "ai", "lead-qualification"],
+  "meta": {
+    "description": "IMAP email trigger → parse content → OpenAI classifies quality → routes to personalized reply + pipeline OR nurture email. Env vars: GOOGLE_SHEET_ID, AGENCY_EMAIL, OPENAI_API_KEY (set in n8n credentials)."
+  }
+}

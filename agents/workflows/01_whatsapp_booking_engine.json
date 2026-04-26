@@ -1,0 +1,313 @@
+{
+  "name": "01 - WhatsApp Booking Engine",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp-inquiry",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook-trigger",
+      "name": "Webhook — Receive WhatsApp Message",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "notes": "Receives POST requests from WhatsApp API or website form. Payload expected: { from, body, timestamp }"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "assign-phone",
+              "name": "phone",
+              "value": "={{ $json.body.entry[0].changes[0].value.messages[0].from }}",
+              "type": "string"
+            },
+            {
+              "id": "assign-message",
+              "name": "message",
+              "value": "={{ $json.body.entry[0].changes[0].value.messages[0].text.body }}",
+              "type": "string"
+            },
+            {
+              "id": "assign-timestamp",
+              "name": "timestamp",
+              "value": "={{ $json.body.entry[0].changes[0].value.messages[0].timestamp }}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "node-normalize-input",
+      "name": "Set — Normalize Input",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [460, 300],
+      "notes": "Extracts phone number and message text from WhatsApp API payload."
+    },
+    {
+      "parameters": {
+        "jsCode": "const message = $input.item.json.message.toLowerCase();\n\n// Simple regex-based intent parser\n// In production, replace with an AI/NLP call for better accuracy\nconst checkinMatch = message.match(/(check.?in|masuk|tiba|arrive)[:\\s]*(\\d{1,2}[\\/-]\\d{1,2}[\\/-]\\d{2,4}|\\d{4}-\\d{2}-\\d{2})/i);\nconst checkoutMatch = message.match(/(check.?out|keluar|pulang|depart)[:\\s]*(\\d{1,2}[\\/-]\\d{1,2}[\\/-]\\d{2,4}|\\d{4}-\\d{2}-\\d{2})/i);\nconst guestMatch = message.match(/(\\d+)\\s*(orang|tamu|guest|pax|person)/i);\n\nreturn [{\n  json: {\n    phone: $input.item.json.phone,\n    message: $input.item.json.message,\n    timestamp: $input.item.json.timestamp,\n    checkin: checkinMatch ? checkinMatch[2] : null,\n    checkout: checkoutMatch ? checkoutMatch[2] : null,\n    guestCount: guestMatch ? parseInt(guestMatch[1]) : null,\n    hasMissingInfo: !checkinMatch || !checkoutMatch || !guestMatch\n  }\n}];"
+      },
+      "id": "node-parse-intent",
+      "name": "Code — Parse Intent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300],
+      "notes": "Parses the message for check-in date, check-out date, and guest count. Sets hasMissingInfo=true if any field is absent."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false },
+          "conditions": [
+            {
+              "id": "cond-missing",
+              "leftValue": "={{ $json.hasMissingInfo }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "node-if-missing-info",
+      "name": "IF — Missing Info?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [900, 300],
+      "notes": "Routes to ask-question branch if check-in, check-out, or guest count is missing."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "assign-reply-missing",
+              "name": "replyMessage",
+              "value": "=Halo! 👋 Terima kasih sudah menghubungi kami.\n\nUntuk membantu Anda, kami butuh informasi berikut:\n✅ Tanggal check-in\n✅ Tanggal check-out\n✅ Jumlah tamu\n\nContoh: Check-in 10 Juli, check-out 15 Juli, 4 orang.\n\nSilakan balas dengan detail tersebut ya!",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "node-ask-question",
+      "name": "Set — Ask Missing Info Message",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [1120, 160],
+      "notes": "Builds a friendly WhatsApp message asking for the missing booking details."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v18.0/{{ $env.WHATSAPP_PHONE_NUMBER_ID }}/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.WHATSAPP_ACCESS_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "Body",
+              "value": "={\n  \"messaging_product\": \"whatsapp\",\n  \"to\": \"{{ $json.phone }}\",\n  \"type\": \"text\",\n  \"text\": { \"body\": \"{{ $json.replyMessage }}\" }\n}"
+            }
+          ]
+        }
+      },
+      "id": "node-send-ask-reply",
+      "name": "HTTP — Send Ask-Info WhatsApp Reply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1340, 160],
+      "notes": "Sends the missing-info question back to the guest via WhatsApp Cloud API. Uses env vars: WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_ACCESS_TOKEN."
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": { "value": "={{ $env.GOOGLE_SHEET_ID }}" },
+        "sheetName": { "value": "Leads" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Phone": "={{ $json.phone }}",
+            "CheckIn": "={{ $json.checkin }}",
+            "CheckOut": "={{ $json.checkout }}",
+            "GuestCount": "={{ $json.guestCount }}",
+            "Status": "new",
+            "CreatedAt": "={{ $now.toISO() }}",
+            "LastMessage": "={{ $json.message }}"
+          }
+        },
+        "options": {
+          "upsertColumn": "Phone"
+        }
+      },
+      "id": "node-save-lead",
+      "name": "Google Sheets — Create / Update Lead",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1120, 440],
+      "notes": "Upserts the lead record in Google Sheets. Uses env var: GOOGLE_SHEET_ID. Sheet name: Leads."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://your-calendar-api.com/availability",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "checkin", "value": "={{ $json.checkin }}" },
+            { "name": "checkout", "value": "={{ $json.checkout }}" },
+            { "name": "property_id", "value": "={{ $env.PROPERTY_ID }}" }
+          ]
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.CALENDAR_API_KEY }}" }
+          ]
+        }
+      },
+      "id": "node-check-availability",
+      "name": "HTTP — Check Availability",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1340, 440],
+      "notes": "Calls your calendar/PMS API to check if the requested dates are available. Replace URL with your actual API. Env var: CALENDAR_API_KEY, PROPERTY_ID."
+    },
+    {
+      "parameters": {
+        "jsCode": "const checkin = new Date($input.item.json.checkin);\nconst checkout = new Date($input.item.json.checkout);\nconst nights = Math.ceil((checkout - checkin) / (1000 * 60 * 60 * 24));\nconst guestCount = $input.item.json.guestCount || 2;\nconst isAvailable = $input.item.json.available !== false; // from availability response\n\n// --- Pricing Logic ---\n// Adjust base rate and seasonal multipliers as needed\nconst BASE_RATE_PER_NIGHT = 1500000; // IDR 1.5jt per malam\nconst HIGH_SEASON_MONTHS = [7, 8, 12, 1]; // July, Aug, Dec, Jan\nconst month = checkin.getMonth() + 1;\nconst isHighSeason = HIGH_SEASON_MONTHS.includes(month);\nconst seasonMultiplier = isHighSeason ? 1.3 : 1.0;\n\nconst totalPrice = nights * BASE_RATE_PER_NIGHT * seasonMultiplier;\nconst formattedPrice = new Intl.NumberFormat('id-ID', {\n  style: 'currency', currency: 'IDR', maximumFractionDigits: 0\n}).format(totalPrice);\n\nreturn [{\n  json: {\n    ...$input.item.json,\n    nights,\n    isAvailable,\n    isHighSeason,\n    totalPrice,\n    formattedPrice,\n    quotationMessage: isAvailable\n      ? `Halo! Berikut penawaran kami 🏡\\n\\n📅 Check-in: ${$input.item.json.checkin}\\n📅 Check-out: ${$input.item.json.checkout}\\n👥 Tamu: ${guestCount} orang\\n🌙 Durasi: ${nights} malam\\n\\n💰 Total: ${formattedPrice}\\n${isHighSeason ? '(High season rate)' : ''}\\n\\nHarga sudah termasuk sarapan & welcome drink. ✅\\n\\nApakah Anda ingin melanjutkan booking? Balas \"YA\" untuk konfirmasi! 😊`\n      : `Maaf, untuk tanggal ${$input.item.json.checkin} – ${$input.item.json.checkout} villa kami sudah penuh. 😔\\n\\nApakah Anda fleksibel dengan tanggal lain? Kami dengan senang hati bantu carikan alternatif! 🗓️`\n  }\n}];"
+      },
+      "id": "node-pricing-logic",
+      "name": "Code — Pricing Logic",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 440],
+      "notes": "Calculates price based on nights and season. Adjust BASE_RATE_PER_NIGHT and HIGH_SEASON_MONTHS to match your property pricing."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v18.0/{{ $env.WHATSAPP_PHONE_NUMBER_ID }}/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.WHATSAPP_ACCESS_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "Body",
+              "value": "={\n  \"messaging_product\": \"whatsapp\",\n  \"to\": \"{{ $json.phone }}\",\n  \"type\": \"text\",\n  \"text\": { \"body\": \"{{ $json.quotationMessage }}\" }\n}"
+            }
+          ]
+        }
+      },
+      "id": "node-send-quotation",
+      "name": "HTTP — Send Quotation via WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1780, 440],
+      "notes": "Sends the final quotation (or unavailability notice) to the guest via WhatsApp Cloud API."
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": { "value": "={{ $env.GOOGLE_SHEET_ID }}" },
+        "sheetName": { "value": "Leads" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Phone": "={{ $json.phone }}",
+            "Status": "quoted",
+            "QuotedAt": "={{ $now.toISO() }}",
+            "QuotedPrice": "={{ $json.formattedPrice }}"
+          }
+        },
+        "options": {
+          "upsertColumn": "Phone"
+        }
+      },
+      "id": "node-update-lead-status",
+      "name": "Google Sheets — Update Lead Status to Quoted",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2000, 440],
+      "notes": "Updates the lead's status to 'quoted' and records the quoted price and timestamp in Google Sheets."
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"ok\" }"
+      },
+      "id": "node-webhook-response",
+      "name": "Webhook Response — 200 OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2220, 440],
+      "notes": "Returns a 200 OK response to the WhatsApp API to acknowledge receipt of the webhook."
+    }
+  ],
+  "connections": {
+    "Webhook — Receive WhatsApp Message": {
+      "main": [[{ "node": "Set — Normalize Input", "type": "main", "index": 0 }]]
+    },
+    "Set — Normalize Input": {
+      "main": [[{ "node": "Code — Parse Intent", "type": "main", "index": 0 }]]
+    },
+    "Code — Parse Intent": {
+      "main": [[{ "node": "IF — Missing Info?", "type": "main", "index": 0 }]]
+    },
+    "IF — Missing Info?": {
+      "main": [
+        [{ "node": "Set — Ask Missing Info Message", "type": "main", "index": 0 }],
+        [{ "node": "Google Sheets — Create / Update Lead", "type": "main", "index": 0 }]
+      ]
+    },
+    "Set — Ask Missing Info Message": {
+      "main": [[{ "node": "HTTP — Send Ask-Info WhatsApp Reply", "type": "main", "index": 0 }]]
+    },
+    "Google Sheets — Create / Update Lead": {
+      "main": [[{ "node": "HTTP — Check Availability", "type": "main", "index": 0 }]]
+    },
+    "HTTP — Check Availability": {
+      "main": [[{ "node": "Code — Pricing Logic", "type": "main", "index": 0 }]]
+    },
+    "Code — Pricing Logic": {
+      "main": [[{ "node": "HTTP — Send Quotation via WhatsApp", "type": "main", "index": 0 }]]
+    },
+    "HTTP — Send Quotation via WhatsApp": {
+      "main": [[{ "node": "Google Sheets — Update Lead Status to Quoted", "type": "main", "index": 0 }]]
+    },
+    "Google Sheets — Update Lead Status to Quoted": {
+      "main": [[{ "node": "Webhook Response — 200 OK", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "error-handler-workflow"
+  },
+  "tags": ["client-facing", "booking", "whatsapp"],
+  "meta": {
+    "description": "Receives WhatsApp inquiries, parses intent, saves lead to Google Sheets, checks availability, generates pricing, and sends quotation. Required env vars: WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_ACCESS_TOKEN, GOOGLE_SHEET_ID, CALENDAR_API_KEY, PROPERTY_ID."
+  }
+}

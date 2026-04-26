@@ -1,0 +1,281 @@
+{
+  "name": "07 - Onboarding Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "deal-closed",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-trigger",
+      "name": "Webhook — Deal Closed",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "notes": "Triggered when a deal is marked as closed/won — either from CRM, manually, or from workflow 06. Payload: { clientName, clientEmail, clientPhone, businessType, numProperties, packageTier }"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "name": "clientName", "value": "={{ $json.body.clientName }}", "type": "string" },
+            { "name": "clientEmail", "value": "={{ $json.body.clientEmail }}", "type": "string" },
+            { "name": "clientPhone", "value": "={{ $json.body.clientPhone }}", "type": "string" },
+            { "name": "packageTier", "value": "={{ $json.body.packageTier || 'Starter' }}", "type": "string" },
+            { "name": "numProperties", "value": "={{ $json.body.numProperties || 1 }}", "type": "number" },
+            { "name": "clientId", "value": "=PF-{{ $now.format('YYYYMMDD') }}-{{ $json.body.clientEmail.slice(0,4).toUpperCase() }}", "type": "string" }
+          ]
+        }
+      },
+      "id": "node-normalize",
+      "name": "Set — Normalize Client Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [460, 300],
+      "notes": "Normalizes client data and generates a unique client ID."
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.AGENCY_EMAIL }}",
+        "toEmail": "={{ $json.clientEmail }}",
+        "subject": "=Selamat Bergabung dengan PropertyFollow! Form Onboarding Anda 🎉",
+        "emailFormat": "html",
+        "html": "=<!DOCTYPE html>\n<html lang='id'>\n<head><meta charset='UTF-8'><style>body{font-family:sans-serif;max-width:600px;margin:0 auto;color:#222;line-height:1.7}.header{background:#111310;color:white;padding:28px 32px;border-radius:8px;margin-bottom:24px}.btn{display:inline-block;background:#009e88;color:white;padding:14px 28px;border-radius:8px;text-decoration:none;font-weight:700;margin-top:16px}</style></head>\n<body>\n<div class='header'><h2 style='margin:0'>Selamat bergabung, {{ $json.clientName }}! 🎉</h2></div>\n<p>Terima kasih sudah mempercayakan otomasi properti Anda kepada PropertyFollow!</p>\n<p>Paket Anda: <strong>{{ $json.packageTier }}</strong><br>Client ID: <strong>{{ $json.clientId }}</strong></p>\n<p>Untuk memulai proses setup, kami perlu beberapa informasi dari Anda. Mohon isi form onboarding berikut:</p>\n<a href='{{ $env.ONBOARDING_FORM_URL }}?client_id={{ $json.clientId }}&email={{ $json.clientEmail }}' class='btn'>Isi Form Onboarding →</a>\n<p style='margin-top:24px;font-size:0.9rem;color:#666'>Form ini membutuhkan waktu sekitar 10-15 menit. Siapkan:<br>• Akun WhatsApp Business Anda<br>• Akses OTA (Airbnb, Booking.com)<br>• Detail properti (foto, harga, fasilitas)</p>\n<p>Ada pertanyaan? Balas email ini atau WhatsApp kami di <strong>{{ $env.ADMIN_PHONE }}</strong>.</p>\n<p>Salam,<br><strong>Tim PropertyFollow</strong></p>\n</body></html>"
+      },
+      "id": "node-send-form-email",
+      "name": "Email — Send Onboarding Form to Client",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [680, 300],
+      "notes": "Sends branded onboarding email with form link. The form URL includes client_id and email as query params for auto-fill. Env: AGENCY_EMAIL, ONBOARDING_FORM_URL, ADMIN_PHONE."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v18.0/{{ $env.WHATSAPP_PHONE_NUMBER_ID }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.WHATSAPP_ACCESS_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "Body",
+              "value": "={\"messaging_product\":\"whatsapp\",\"to\":\"{{ $json.clientPhone }}\",\"type\":\"text\",\"text\":{\"body\":\"Halo {{ $json.clientName }}! 🎉\\n\\nSelamat bergabung dengan PropertyFollow!\\n\\nKami sudah mengirimkan form onboarding ke email {{ $json.clientEmail }}.\\n\\nMohon isi form tersebut agar kami bisa mulai setup sistem untuk Anda.\\n\\nAda pertanyaan? Balas pesan ini! 😊\"}}"
+            }
+          ]
+        }
+      },
+      "id": "node-notify-client-wa",
+      "name": "HTTP — Notify Client via WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [900, 300],
+      "notes": "Sends a WhatsApp nudge to the client to check their email and fill the form."
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": { "value": "={{ $env.GOOGLE_SHEET_ID }}" },
+        "sheetName": { "value": "Clients" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "ClientID": "={{ $json.clientId }}",
+            "Name": "={{ $json.clientName }}",
+            "Email": "={{ $json.clientEmail }}",
+            "Phone": "={{ $json.clientPhone }}",
+            "Package": "={{ $json.packageTier }}",
+            "NumProperties": "={{ $json.numProperties }}",
+            "Status": "onboarding",
+            "FormSentAt": "={{ $now.toISO() }}",
+            "FormCompleted": "no"
+          }
+        },
+        "options": { "upsertColumn": "ClientID" }
+      },
+      "id": "node-create-client-record",
+      "name": "Google Sheets — Create Client Record",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1120, 300],
+      "notes": "Creates the client record in the Clients sheet. Status starts as 'onboarding'."
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "onboarding-form-submitted",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-form-webhook",
+      "name": "Webhook — Receive Form Submission",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 560],
+      "notes": "Second trigger: receives form submission data from Typeform/Google Forms webhook. Configure your form to POST to this endpoint. Expected fields: clientId, propertyName, address, otaAccess, whatsappNumber, checkInTime, checkOutTime, baseRate, amenities, specialInstructions."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "name": "clientId", "value": "={{ $json.body.clientId || $json.body.answers?.clientId }}", "type": "string" },
+            { "name": "propertyName", "value": "={{ $json.body.propertyName }}", "type": "string" },
+            { "name": "address", "value": "={{ $json.body.address }}", "type": "string" },
+            { "name": "whatsappNumber", "value": "={{ $json.body.whatsappNumber }}", "type": "string" },
+            { "name": "checkInTime", "value": "={{ $json.body.checkInTime || '14:00' }}", "type": "string" },
+            { "name": "checkOutTime", "value": "={{ $json.body.checkOutTime || '12:00' }}", "type": "string" },
+            { "name": "baseRate", "value": "={{ $json.body.baseRate }}", "type": "number" },
+            { "name": "amenities", "value": "={{ $json.body.amenities }}", "type": "string" }
+          ]
+        }
+      },
+      "id": "node-structure-form-data",
+      "name": "Set — Structure Form Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [460, 560],
+      "notes": "Normalizes the form submission data into a standard structure."
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": { "value": "={{ $env.GOOGLE_SHEET_ID }}" },
+        "sheetName": { "value": "Clients" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "ClientID": "={{ $json.clientId }}",
+            "PropertyName": "={{ $json.propertyName }}",
+            "Address": "={{ $json.address }}",
+            "WhatsAppNumber": "={{ $json.whatsappNumber }}",
+            "CheckInTime": "={{ $json.checkInTime }}",
+            "CheckOutTime": "={{ $json.checkOutTime }}",
+            "BaseRate": "={{ $json.baseRate }}",
+            "Amenities": "={{ $json.amenities }}",
+            "FormCompleted": "yes",
+            "FormCompletedAt": "={{ $now.toISO() }}",
+            "Status": "setup_in_progress"
+          }
+        },
+        "options": { "upsertColumn": "ClientID" }
+      },
+      "id": "node-update-client",
+      "name": "Google Sheets — Update Client with Form Data",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [680, 560],
+      "notes": "Updates the client record with all property details from the form submission."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v18.0/{{ $env.WHATSAPP_PHONE_NUMBER_ID }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.WHATSAPP_ACCESS_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "Body",
+              "value": "={\"messaging_product\":\"whatsapp\",\"to\":\"{{ $env.INTERNAL_TEAM_PHONE }}\",\"type\":\"text\",\"text\":{\"body\":\"📋 CLIENT ONBOARDING SELESAI\\n\\nClient ID: {{ $json.clientId }}\\nProperti: {{ $json.propertyName }}\\nAlamat: {{ $json.address }}\\nWA: {{ $json.whatsappNumber }}\\nCheck-in: {{ $json.checkInTime }}\\nCheck-out: {{ $json.checkOutTime }}\\nBase Rate: IDR {{ $json.baseRate }}\\n\\nMohon mulai setup workflow. Target: 5 hari kerja! 🚀\"}}"
+            }
+          ]
+        }
+      },
+      "id": "node-notify-team",
+      "name": "HTTP — Notify Internal Team to Start Setup",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [900, 560],
+      "notes": "Alerts the internal team via WhatsApp that the client has completed onboarding and setup can begin. Env: INTERNAL_TEAM_PHONE."
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.AGENCY_EMAIL }}",
+        "toEmail": "={{ $json.clientEmail || $json.email }}",
+        "subject": "=Form Onboarding Diterima — Setup Dimulai! ✅",
+        "emailFormat": "html",
+        "html": "=<html><body style='font-family:sans-serif;max-width:600px;margin:0 auto'><h2 style='color:#009e88'>Form Anda sudah kami terima! ✅</h2><p>Halo,</p><p>Terima kasih telah mengisi form onboarding untuk <strong>{{ $json.propertyName }}</strong>.</p><p>Tim kami sudah mulai menyiapkan sistem automasi Anda. Estimasi setup: <strong>5-7 hari kerja</strong>.</p><p>Kami akan menghubungi Anda saat sistem sudah siap untuk testing.</p><p>Ada pertanyaan? Balas email ini atau WhatsApp kami.<br><strong>Tim PropertyFollow</strong></p></body></html>"
+      },
+      "id": "node-confirm-email",
+      "name": "Email — Send Onboarding Confirmation to Client",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1120, 560],
+      "notes": "Sends confirmation email to client that onboarding is received and setup has started."
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"onboarding_complete\" }"
+      },
+      "id": "node-respond-form",
+      "name": "Webhook Response — Onboarding Complete",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1340, 560]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"onboarding_started\" }"
+      },
+      "id": "node-respond-start",
+      "name": "Webhook Response — Onboarding Started",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1340, 300]
+    }
+  ],
+  "connections": {
+    "Webhook — Deal Closed": {
+      "main": [[{ "node": "Set — Normalize Client Data", "type": "main", "index": 0 }]]
+    },
+    "Set — Normalize Client Data": {
+      "main": [[{ "node": "Email — Send Onboarding Form to Client", "type": "main", "index": 0 }]]
+    },
+    "Email — Send Onboarding Form to Client": {
+      "main": [[{ "node": "HTTP — Notify Client via WhatsApp", "type": "main", "index": 0 }]]
+    },
+    "HTTP — Notify Client via WhatsApp": {
+      "main": [[{ "node": "Google Sheets — Create Client Record", "type": "main", "index": 0 }]]
+    },
+    "Google Sheets — Create Client Record": {
+      "main": [[{ "node": "Webhook Response — Onboarding Started", "type": "main", "index": 0 }]]
+    },
+    "Webhook — Receive Form Submission": {
+      "main": [[{ "node": "Set — Structure Form Data", "type": "main", "index": 0 }]]
+    },
+    "Set — Structure Form Data": {
+      "main": [[{ "node": "Google Sheets — Update Client with Form Data", "type": "main", "index": 0 }]]
+    },
+    "Google Sheets — Update Client with Form Data": {
+      "main": [[{ "node": "HTTP — Notify Internal Team to Start Setup", "type": "main", "index": 0 }]]
+    },
+    "HTTP — Notify Internal Team to Start Setup": {
+      "main": [[{ "node": "Email — Send Onboarding Confirmation to Client", "type": "main", "index": 0 }]]
+    },
+    "Email — Send Onboarding Confirmation to Client": {
+      "main": [[{ "node": "Webhook Response — Onboarding Complete", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "error-handler-workflow"
+  },
+  "tags": ["internal", "onboarding", "email", "whatsapp"],
+  "meta": {
+    "description": "Two-phase onboarding: (1) Deal closed → send form + notify client. (2) Form submitted → update record + notify team + confirm to client. Env vars: GOOGLE_SHEET_ID, AGENCY_EMAIL, ADMIN_PHONE, ONBOARDING_FORM_URL, WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_ACCESS_TOKEN, INTERNAL_TEAM_PHONE."
+  }
+}

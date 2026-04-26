@@ -1,0 +1,174 @@
+{
+  "name": "06 - Proposal Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "generate-proposal",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-trigger",
+      "name": "Webhook — New Qualified Lead",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "notes": "Triggered when a lead is marked as qualified (e.g. from workflow 05 via HTTP call, or manually). Payload: { leadEmail, leadName, businessType, intent, numProperties, requirements }"
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": { "value": "={{ $env.GOOGLE_SHEET_ID }}" },
+        "sheetName": { "value": "Pipeline" },
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "Email",
+              "condition": "equals",
+              "keyValue": "={{ $json.body.leadEmail }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-fetch-lead",
+      "name": "Google Sheets — Fetch Lead Data",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [460, 300],
+      "notes": "Fetches the complete lead profile from the Pipeline sheet using email as the lookup key."
+    },
+    {
+      "parameters": {
+        "resource": "text",
+        "operation": "message",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a senior business consultant at PropertyFollow, a property automation agency in Bali & Lombok, Indonesia.\n\nWrite professional proposals in Bahasa Indonesia for villa and property owners.\n\nA proposal must include:\n1. Ringkasan Masalah — specific pain points based on their situation\n2. Solusi yang Kami Tawarkan — tailored automation solutions\n3. Scope of Work — specific deliverables and timeline\n4. Estimasi Investasi — pricing range (Setup Fee + Monthly Retainer)\n5. Langkah Selanjutnya — clear next steps\n\nPricing guide:\n- Small (1-5 units): Setup IDR 5M-15M, Retainer IDR 500K-2M/month\n- Medium (5-15 units): Setup IDR 15M-40M, Retainer IDR 2M-5M/month\n- Large (15+ units): Setup IDR 40M+, Retainer IDR 5M-10M+/month\n\nWrite in a professional but warm tone. Be specific, not generic."
+            },
+            {
+              "role": "user",
+              "content": "=Generate a proposal for this client:\n\nNama: {{ $json.Name }}\nEmail: {{ $json.Email }}\nJenis Bisnis: {{ $json.BusinessType }}\nKebutuhan: {{ $json.Intent }}\nJumlah Properti: {{ $json.NumProperties || 'belum disebutkan' }}\n\nBuat proposal yang dipersonalisasi dan meyakinkan."
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 2000,
+          "temperature": 0.7
+        }
+      },
+      "id": "node-generate-proposal",
+      "name": "OpenAI — Generate Proposal Content",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1,
+      "position": [680, 300],
+      "notes": "Uses GPT-4o to generate a personalized proposal based on lead data. Uses gpt-4o for higher quality output."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "proposalHtml",
+              "value": "=<!DOCTYPE html>\n<html lang='id'>\n<head>\n<meta charset='UTF-8'>\n<style>\n  body { font-family: Georgia, serif; max-width: 800px; margin: 40px auto; color: #222; line-height: 1.7; }\n  .header { background: #111310; color: white; padding: 32px 40px; border-radius: 8px; margin-bottom: 32px; }\n  .header h1 { margin: 0; font-size: 1.4rem; }\n  .header p { margin: 8px 0 0; color: #aaa; font-size: 0.9rem; }\n  h2 { color: #009e88; border-bottom: 2px solid #e6f5f2; padding-bottom: 8px; }\n  .meta { background: #f5f5f0; padding: 20px; border-radius: 8px; margin-bottom: 24px; }\n  .meta p { margin: 4px 0; }\n  .content { white-space: pre-wrap; }\n  .footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid #eee; font-size: 0.85rem; color: #888; }\n</style>\n</head>\n<body>\n<div class='header'>\n  <h1>PROPOSAL LAYANAN AUTOMASI</h1>\n  <p>PropertyFollow · Bali & Lombok, Indonesia</p>\n</div>\n<div class='meta'>\n  <p><strong>Untuk:</strong> {{ $json.Name }}</p>\n  <p><strong>Email:</strong> {{ $json.Email }}</p>\n  <p><strong>Tanggal:</strong> {{ $now.format('DD MMMM YYYY') }}</p>\n  <p><strong>Referensi:</strong> PF-{{ $now.format('YYYYMMDD') }}-{{ $json.Email.slice(0,4).toUpperCase() }}</p>\n</div>\n<div class='content'>{{ $json.message.content }}</div>\n<div class='footer'>\n  <p>PropertyFollow · hello@aiautomationagent.id · +62 812-xxxx-xxxx</p>\n  <p>Proposal ini berlaku 14 hari sejak tanggal penerbitan.</p>\n</div>\n</body>\n</html>",
+              "type": "string"
+            },
+            {
+              "name": "proposalText",
+              "value": "={{ $json.message.content }}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "node-build-html",
+      "name": "Set — Build HTML Proposal",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [900, 300],
+      "notes": "Wraps the AI-generated proposal content in a branded HTML template. Customize header, colors, and footer with actual agency details."
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.AGENCY_EMAIL }}",
+        "toEmail": "={{ $json.Email }}",
+        "subject": "=Proposal Automasi Properti — {{ $json.Name }} | PropertyFollow",
+        "emailFormat": "html",
+        "html": "={{ $json.proposalHtml }}",
+        "options": {
+          "ccEmail": "={{ $env.AGENCY_EMAIL }}"
+        }
+      },
+      "id": "node-send-proposal",
+      "name": "Email — Send Proposal to Client",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1120, 300],
+      "notes": "Sends the HTML proposal to the client and BCC's the agency email for records. Env: AGENCY_EMAIL."
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": { "value": "={{ $env.GOOGLE_SHEET_ID }}" },
+        "sheetName": { "value": "Pipeline" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Email": "={{ $json.Email }}",
+            "Stage": "proposal_sent",
+            "ProposalSentAt": "={{ $now.toISO() }}"
+          }
+        },
+        "options": { "upsertColumn": "Email" }
+      },
+      "id": "node-update-pipeline",
+      "name": "Google Sheets — Update Stage to Proposal Sent",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1340, 300],
+      "notes": "Updates the lead's pipeline stage to 'proposal_sent' for CRM tracking."
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"proposal_sent\" }"
+      },
+      "id": "node-respond",
+      "name": "Webhook Response — Proposal Sent",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1560, 300]
+    }
+  ],
+  "connections": {
+    "Webhook — New Qualified Lead": {
+      "main": [[{ "node": "Google Sheets — Fetch Lead Data", "type": "main", "index": 0 }]]
+    },
+    "Google Sheets — Fetch Lead Data": {
+      "main": [[{ "node": "OpenAI — Generate Proposal Content", "type": "main", "index": 0 }]]
+    },
+    "OpenAI — Generate Proposal Content": {
+      "main": [[{ "node": "Set — Build HTML Proposal", "type": "main", "index": 0 }]]
+    },
+    "Set — Build HTML Proposal": {
+      "main": [[{ "node": "Email — Send Proposal to Client", "type": "main", "index": 0 }]]
+    },
+    "Email — Send Proposal to Client": {
+      "main": [[{ "node": "Google Sheets — Update Stage to Proposal Sent", "type": "main", "index": 0 }]]
+    },
+    "Google Sheets — Update Stage to Proposal Sent": {
+      "main": [[{ "node": "Webhook Response — Proposal Sent", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "error-handler-workflow"
+  },
+  "tags": ["internal", "proposal", "ai", "email"],
+  "meta": {
+    "description": "Fetches lead data from Google Sheets, generates a tailored HTML proposal using GPT-4o, sends it via email, and updates pipeline stage. Env vars: GOOGLE_SHEET_ID, AGENCY_EMAIL, OPENAI_API_KEY (in credentials)."
+  }
+}

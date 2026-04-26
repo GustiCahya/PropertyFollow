@@ -1,0 +1,247 @@
+{
+  "name": "03 - Calendar Sync & Booking Handler",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ota-booking-event",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook",
+      "name": "Webhook — Receive OTA Booking Event",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "notes": "Receives booking events from OTAs (Airbnb, Booking.com) or WhatsApp confirmation. Expected payload: { guestName, guestPhone, guestEmail, checkin, checkout, platform, bookingId, propertyId }"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "name": "bookingId", "value": "={{ $json.body.bookingId || $json.body.reservation_id }}", "type": "string" },
+            { "name": "guestName", "value": "={{ $json.body.guestName || $json.body.guest.name }}", "type": "string" },
+            { "name": "guestPhone", "value": "={{ $json.body.guestPhone || $json.body.guest.phone }}", "type": "string" },
+            { "name": "guestEmail", "value": "={{ $json.body.guestEmail || $json.body.guest.email }}", "type": "string" },
+            { "name": "checkin", "value": "={{ $json.body.checkin || $json.body.check_in }}", "type": "string" },
+            { "name": "checkout", "value": "={{ $json.body.checkout || $json.body.check_out }}", "type": "string" },
+            { "name": "platform", "value": "={{ $json.body.platform || 'direct' }}", "type": "string" },
+            { "name": "propertyId", "value": "={{ $json.body.propertyId || $env.PROPERTY_ID }}", "type": "string" }
+          ]
+        }
+      },
+      "id": "node-normalize",
+      "name": "Set — Normalize Booking Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [460, 300],
+      "notes": "Normalizes the booking payload from any OTA format into a standard internal schema."
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": { "value": "={{ $env.GOOGLE_SHEET_ID }}" },
+        "sheetName": { "value": "Bookings" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "BookingID": "={{ $json.bookingId }}",
+            "GuestName": "={{ $json.guestName }}",
+            "GuestPhone": "={{ $json.guestPhone }}",
+            "GuestEmail": "={{ $json.guestEmail }}",
+            "CheckIn": "={{ $json.checkin }}",
+            "CheckOut": "={{ $json.checkout }}",
+            "Platform": "={{ $json.platform }}",
+            "PropertyID": "={{ $json.propertyId }}",
+            "Status": "confirmed",
+            "CreatedAt": "={{ $now.toISO() }}"
+          }
+        },
+        "options": { "upsertColumn": "BookingID" }
+      },
+      "id": "node-save-booking",
+      "name": "Google Sheets — Save Booking",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [680, 300],
+      "notes": "Saves or updates the booking in the Bookings sheet. Uses BookingID as upsert key."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://your-calendar-api.com/block-dates",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.CALENDAR_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "Body",
+              "value": "={\"property_id\":\"{{ $json.propertyId }}\",\"checkin\":\"{{ $json.checkin }}\",\"checkout\":\"{{ $json.checkout }}\",\"booking_id\":\"{{ $json.bookingId }}\",\"platforms\":[\"airbnb\",\"booking_com\",\"direct\"]}"
+            }
+          ]
+        }
+      },
+      "id": "node-sync-calendar",
+      "name": "HTTP — Sync & Block Dates on All Calendars",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [900, 300],
+      "notes": "Calls your PMS or channel manager API to block dates across all platforms. Replace URL with your actual API endpoint. Env: CALENDAR_API_KEY."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-conflict",
+              "leftValue": "={{ $json.conflict }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "node-conflict-check",
+      "name": "IF — Double Booking Conflict?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1120, 300],
+      "notes": "Checks if the calendar sync response flagged a conflict. True → alert admin. False → proceed."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v18.0/{{ $env.WHATSAPP_PHONE_NUMBER_ID }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.WHATSAPP_ACCESS_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "Body",
+              "value": "={\"messaging_product\":\"whatsapp\",\"to\":\"{{ $env.ADMIN_PHONE }}\",\"type\":\"text\",\"text\":{\"body\":\"⚠️ DOUBLE BOOKING ALERT!\\nBooking ID: {{ $json.bookingId }}\\nGuest: {{ $json.guestName }}\\nDates: {{ $json.checkin }} – {{ $json.checkout }}\\nPlatform: {{ $json.platform }}\\n\\nSegera cek dan hubungi tamu!\"}}"
+            }
+          ]
+        }
+      },
+      "id": "node-alert-admin",
+      "name": "HTTP — Alert Admin (Conflict)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1340, 160],
+      "notes": "Sends an urgent WhatsApp alert to admin if a double booking conflict is detected. Env: ADMIN_PHONE."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v18.0/{{ $env.WHATSAPP_PHONE_NUMBER_ID }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.WHATSAPP_ACCESS_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "Body",
+              "value": "={\"messaging_product\":\"whatsapp\",\"to\":\"{{ $json.guestPhone }}\",\"type\":\"text\",\"text\":{\"body\":\"Halo {{ $json.guestName }}! 🎉\\n\\nBooking Anda DIKONFIRMASI!\\n\\n📅 Check-in: {{ $json.checkin }}\\n📅 Check-out: {{ $json.checkout }}\\n🏡 ID Booking: {{ $json.bookingId }}\\n\\nKami akan mengirimkan detail check-in sehari sebelum kedatangan Anda.\\nAda pertanyaan? Hubungi kami kapan saja! 😊\"}}"
+            }
+          ]
+        }
+      },
+      "id": "node-confirm-guest",
+      "name": "HTTP — Send Booking Confirmation to Guest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1340, 440],
+      "notes": "Sends a booking confirmation WhatsApp message to the guest."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v18.0/{{ $env.WHATSAPP_PHONE_NUMBER_ID }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.WHATSAPP_ACCESS_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "Body",
+              "value": "={\"messaging_product\":\"whatsapp\",\"to\":\"{{ $env.HOUSEKEEPING_PHONE }}\",\"type\":\"text\",\"text\":{\"body\":\"📋 BOOKING BARU\\n\\nTamu: {{ $json.guestName }}\\nCheck-in: {{ $json.checkin }}\\nCheck-out: {{ $json.checkout }}\\n\\nSiapkan kamar sebelum check-in. Terima kasih! 🏠\"}}"
+            }
+          ]
+        }
+      },
+      "id": "node-notify-team",
+      "name": "HTTP — Notify Housekeeping Team",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1560, 440],
+      "notes": "Notifies the housekeeping team via WhatsApp. Env: HOUSEKEEPING_PHONE. Add more HTTP nodes for additional team members."
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"ok\" }"
+      },
+      "id": "node-respond",
+      "name": "Webhook Response — 200 OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1780, 440]
+    }
+  ],
+  "connections": {
+    "Webhook — Receive OTA Booking Event": {
+      "main": [[{ "node": "Set — Normalize Booking Data", "type": "main", "index": 0 }]]
+    },
+    "Set — Normalize Booking Data": {
+      "main": [[{ "node": "Google Sheets — Save Booking", "type": "main", "index": 0 }]]
+    },
+    "Google Sheets — Save Booking": {
+      "main": [[{ "node": "HTTP — Sync & Block Dates on All Calendars", "type": "main", "index": 0 }]]
+    },
+    "HTTP — Sync & Block Dates on All Calendars": {
+      "main": [[{ "node": "IF — Double Booking Conflict?", "type": "main", "index": 0 }]]
+    },
+    "IF — Double Booking Conflict?": {
+      "main": [
+        [{ "node": "HTTP — Alert Admin (Conflict)", "type": "main", "index": 0 }],
+        [{ "node": "HTTP — Send Booking Confirmation to Guest", "type": "main", "index": 0 }]
+      ]
+    },
+    "HTTP — Send Booking Confirmation to Guest": {
+      "main": [[{ "node": "HTTP — Notify Housekeeping Team", "type": "main", "index": 0 }]]
+    },
+    "HTTP — Notify Housekeeping Team": {
+      "main": [[{ "node": "Webhook Response — 200 OK", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "error-handler-workflow"
+  },
+  "tags": ["client-facing", "booking", "calendar", "operations"],
+  "meta": {
+    "description": "Receives booking events from OTAs, saves to Google Sheets, syncs/blocks dates across all calendars, checks for conflicts, and notifies guest + housekeeping. Env vars: GOOGLE_SHEET_ID, CALENDAR_API_KEY, WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_ACCESS_TOKEN, ADMIN_PHONE, HOUSEKEEPING_PHONE, PROPERTY_ID."
+  }
+}

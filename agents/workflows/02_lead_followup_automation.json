@@ -1,0 +1,159 @@
+{
+  "name": "02 - Lead Follow-up Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "hours", "hoursInterval": 1 }] }
+      },
+      "id": "node-cron",
+      "name": "Schedule Trigger — Every 1 Hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "notes": "Runs every hour. Adjust interval as needed."
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": { "value": "={{ $env.GOOGLE_SHEET_ID }}" },
+        "sheetName": { "value": "Leads" },
+        "options": { "returnAllMatches": true }
+      },
+      "id": "node-get-leads",
+      "name": "Google Sheets — Get Quoted Leads",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [460, 300],
+      "notes": "Reads all leads from Leads sheet. Filter by Status='quoted' in the IF node below."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-quoted",
+              "leftValue": "={{ $json.Status }}",
+              "rightValue": "quoted",
+              "operator": { "type": "string", "operation": "equals" }
+            },
+            {
+              "id": "cond-24h",
+              "leftValue": "={{ Math.floor((Date.now() - new Date($json.QuotedAt).getTime()) / 3600000) }}",
+              "rightValue": 24,
+              "operator": { "type": "number", "operation": "gte" }
+            },
+            {
+              "id": "cond-not-done",
+              "leftValue": "={{ $json.FollowUpSent }}",
+              "rightValue": "yes",
+              "operator": { "type": "string", "operation": "notEquals" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "node-if-followup",
+      "name": "IF — Needs Follow-up?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 300],
+      "notes": "True branch: lead is quoted, no reply in 24h, not yet followed up."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "followUpMessage",
+              "value": "=Halo kak! 😊 Kami ingin memastikan Anda sudah menerima penawaran kami untuk tanggal {{ $json.CheckIn }} – {{ $json.CheckOut }}.\n\nAda pertanyaan? Kami siap bantu! 🏡",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "node-build-msg",
+      "name": "Set — Build Follow-up Message",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [900, 180]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v18.0/{{ $env.WHATSAPP_PHONE_NUMBER_ID }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.WHATSAPP_ACCESS_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "Body",
+              "value": "={\"messaging_product\":\"whatsapp\",\"to\":\"{{ $json.Phone }}\",\"type\":\"text\",\"text\":{\"body\":\"{{ $json.followUpMessage }}\"}}"
+            }
+          ]
+        }
+      },
+      "id": "node-send-wa",
+      "name": "HTTP — Send Follow-up WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1120, 180],
+      "notes": "Sends follow-up via WhatsApp Cloud API. Env: WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_ACCESS_TOKEN."
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": { "value": "={{ $env.GOOGLE_SHEET_ID }}" },
+        "sheetName": { "value": "Leads" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Phone": "={{ $json.Phone }}",
+            "FollowUpSent": "yes",
+            "FollowUpAt": "={{ $now.toISO() }}"
+          }
+        },
+        "options": { "upsertColumn": "Phone" }
+      },
+      "id": "node-mark-done",
+      "name": "Google Sheets — Mark Follow-up Sent",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1340, 180],
+      "notes": "Marks FollowUpSent=yes to prevent duplicate sends."
+    }
+  ],
+  "connections": {
+    "Schedule Trigger — Every 1 Hour": {
+      "main": [[{ "node": "Google Sheets — Get Quoted Leads", "type": "main", "index": 0 }]]
+    },
+    "Google Sheets — Get Quoted Leads": {
+      "main": [[{ "node": "IF — Needs Follow-up?", "type": "main", "index": 0 }]]
+    },
+    "IF — Needs Follow-up?": {
+      "main": [
+        [{ "node": "Set — Build Follow-up Message", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Set — Build Follow-up Message": {
+      "main": [[{ "node": "HTTP — Send Follow-up WhatsApp", "type": "main", "index": 0 }]]
+    },
+    "HTTP — Send Follow-up WhatsApp": {
+      "main": [[{ "node": "Google Sheets — Mark Follow-up Sent", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "error-handler-workflow"
+  },
+  "tags": ["client-facing", "follow-up", "whatsapp", "scheduler"],
+  "meta": {
+    "description": "Hourly scheduler that follows up on quoted leads with no reply after 24h via WhatsApp. Env vars: GOOGLE_SHEET_ID, WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_ACCESS_TOKEN."
+  }
+}

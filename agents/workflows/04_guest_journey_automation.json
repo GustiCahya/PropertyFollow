@@ -1,0 +1,266 @@
+{
+  "name": "04 - Guest Journey Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "booking-confirmed",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-trigger",
+      "name": "Webhook — Booking Confirmed",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "notes": "Triggered when a booking is confirmed. Can also be called from workflow 03 via HTTP Request. Payload: { guestName, guestPhone, checkin, checkout, bookingId, propertyId }"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "name": "guestName", "value": "={{ $json.body.guestName }}", "type": "string" },
+            { "name": "guestPhone", "value": "={{ $json.body.guestPhone }}", "type": "string" },
+            { "name": "checkin", "value": "={{ $json.body.checkin }}", "type": "string" },
+            { "name": "checkout", "value": "={{ $json.body.checkout }}", "type": "string" },
+            { "name": "bookingId", "value": "={{ $json.body.bookingId }}", "type": "string" },
+            { "name": "checkinTimestamp", "value": "={{ new Date($json.body.checkin).getTime() }}", "type": "number" },
+            { "name": "checkoutTimestamp", "value": "={{ new Date($json.body.checkout).getTime() }}", "type": "number" }
+          ]
+        }
+      },
+      "id": "node-set-data",
+      "name": "Set — Store Guest Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [460, 300],
+      "notes": "Stores guest data and pre-calculates check-in/out timestamps for Wait nodes."
+    },
+    {
+      "parameters": {
+        "amount": 1,
+        "unit": "days",
+        "resume": "specificTime",
+        "dateTime": "={{ new Date($json.checkinTimestamp - 86400000).toISOString() }}"
+      },
+      "id": "node-wait-checkin",
+      "name": "Wait — Until H-1 Before Check-in",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [680, 300],
+      "notes": "Pauses execution until 1 day before check-in date. This is when we send pre-arrival instructions."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v18.0/{{ $env.WHATSAPP_PHONE_NUMBER_ID }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.WHATSAPP_ACCESS_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "Body",
+              "value": "={\"messaging_product\":\"whatsapp\",\"to\":\"{{ $json.guestPhone }}\",\"type\":\"text\",\"text\":{\"body\":\"Halo {{ $json.guestName }}! 🌴\\n\\nBesok adalah hari check-in Anda. Kami sangat senang menyambut kedatangan Anda!\\n\\n🗝️ INFO CHECK-IN:\\n• Waktu check-in: 14:00 WITA\\n• Alamat: [ALAMAT VILLA]\\n• Google Maps: [LINK MAPS]\\n• Password WiFi: [WIFI_PASSWORD]\\n\\n📞 Kontak darurat: {{ $env.ADMIN_PHONE }}\\n\\nSelamat menikmati liburan! 🌺\"}}"
+            }
+          ]
+        }
+      },
+      "id": "node-send-checkin-info",
+      "name": "HTTP — Send Pre Check-in Info",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [900, 300],
+      "notes": "Sends check-in instructions including address, maps link, and WiFi password. Update the message template with actual villa details."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v18.0/{{ $env.WHATSAPP_PHONE_NUMBER_ID }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.WHATSAPP_ACCESS_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "Body",
+              "value": "={\"messaging_product\":\"whatsapp\",\"to\":\"{{ $json.guestPhone }}\",\"type\":\"text\",\"text\":{\"body\":\"✨ PENAWARAN SPESIAL untuk Anda {{ $json.guestName }}!\\n\\n🍳 Paket sarapan romantis: +150.000/orang\\n🏊 Private pool session sore: +200.000\\n🛵 Sewa motor 24 jam: +100.000/unit\\n💆 In-villa massage: +350.000/orang\\n\\nPersan sebelum besok dan dapatkan 10% diskon! Balas pesan ini untuk booking. 🌟\"}}"
+            }
+          ]
+        }
+      },
+      "id": "node-send-upsell",
+      "name": "HTTP — Send Upsell Offers",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1120, 300],
+      "notes": "Sends upsell offers alongside the check-in info. Customize with actual available services and prices."
+    },
+    {
+      "parameters": {
+        "resume": "specificTime",
+        "dateTime": "={{ new Date($json.checkinTimestamp + 86400000).toISOString() }}"
+      },
+      "id": "node-wait-during-stay",
+      "name": "Wait — During Stay (D+1)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [1340, 300],
+      "notes": "Waits until D+1 of check-in to send a mid-stay support message."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v18.0/{{ $env.WHATSAPP_PHONE_NUMBER_ID }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.WHATSAPP_ACCESS_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "Body",
+              "value": "={\"messaging_product\":\"whatsapp\",\"to\":\"{{ $json.guestPhone }}\",\"type\":\"text\",\"text\":{\"body\":\"Halo {{ $json.guestName }}! 😊\\n\\nBagaimana kondisi villa dan fasilitas kami? Semoga semuanya nyaman!\\n\\nJika ada yang kurang atau butuh bantuan, langsung hubungi kami ya. Kami siap membantu 24/7! 🌟\\n\\n📞 {{ $env.ADMIN_PHONE }}\"}}"
+            }
+          ]
+        }
+      },
+      "id": "node-support-msg",
+      "name": "HTTP — Send Mid-Stay Support Message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1560, 300],
+      "notes": "Checks in with the guest during their stay to ensure satisfaction and catch any issues early."
+    },
+    {
+      "parameters": {
+        "resume": "specificTime",
+        "dateTime": "={{ new Date($json.checkoutTimestamp).toISOString() }}"
+      },
+      "id": "node-wait-checkout",
+      "name": "Wait — Until Checkout Date",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [1780, 300],
+      "notes": "Waits until checkout date to send the thank you and review request."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v18.0/{{ $env.WHATSAPP_PHONE_NUMBER_ID }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.WHATSAPP_ACCESS_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "Body",
+              "value": "={\"messaging_product\":\"whatsapp\",\"to\":\"{{ $json.guestPhone }}\",\"type\":\"text\",\"text\":{\"body\":\"Halo {{ $json.guestName }}! 👋\\n\\nTerima kasih sudah menginap bersama kami! Kami harap Anda mendapatkan pengalaman yang luar biasa. 🌺\\n\\n⭐ Maukah Anda meluangkan 2 menit untuk memberikan ulasan?\\n\\n📝 Airbnb: [AIRBNB_REVIEW_LINK]\\n📝 Google: [GOOGLE_REVIEW_LINK]\\n\\nUlasan Anda sangat berarti bagi kami dan membantu tamu lain! 🙏\\n\\nSampai jumpa lagi di Bali! 🌴\"}}"
+            }
+          ]
+        }
+      },
+      "id": "node-review-request",
+      "name": "HTTP — Send Thank You + Review Request",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2000, 300],
+      "notes": "Sends thank you message and review request links on checkout day. Replace AIRBNB_REVIEW_LINK and GOOGLE_REVIEW_LINK with actual URLs."
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": { "value": "={{ $env.GOOGLE_SHEET_ID }}" },
+        "sheetName": { "value": "Guests" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Phone": "={{ $json.guestPhone }}",
+            "GuestName": "={{ $json.guestName }}",
+            "LastStay": "={{ $json.checkout }}",
+            "TotalStays": "=1",
+            "RetargetTag": "past_guest",
+            "UpdatedAt": "={{ $now.toISO() }}"
+          }
+        },
+        "options": { "upsertColumn": "Phone" }
+      },
+      "id": "node-tag-retarget",
+      "name": "Google Sheets — Tag Guest for Retargeting",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2220, 300],
+      "notes": "Saves guest to Guests sheet and tags as 'past_guest' for future retargeting campaigns."
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"guest_journey_started\" }"
+      },
+      "id": "node-respond",
+      "name": "Webhook Response — Journey Started",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [680, 500]
+    }
+  ],
+  "connections": {
+    "Webhook — Booking Confirmed": {
+      "main": [[{ "node": "Set — Store Guest Data", "type": "main", "index": 0 }]]
+    },
+    "Set — Store Guest Data": {
+      "main": [
+        [{ "node": "Wait — Until H-1 Before Check-in", "type": "main", "index": 0 }],
+        [{ "node": "Webhook Response — Journey Started", "type": "main", "index": 0 }]
+      ]
+    },
+    "Wait — Until H-1 Before Check-in": {
+      "main": [[{ "node": "HTTP — Send Pre Check-in Info", "type": "main", "index": 0 }]]
+    },
+    "HTTP — Send Pre Check-in Info": {
+      "main": [[{ "node": "HTTP — Send Upsell Offers", "type": "main", "index": 0 }]]
+    },
+    "HTTP — Send Upsell Offers": {
+      "main": [[{ "node": "Wait — During Stay (D+1)", "type": "main", "index": 0 }]]
+    },
+    "Wait — During Stay (D+1)": {
+      "main": [[{ "node": "HTTP — Send Mid-Stay Support Message", "type": "main", "index": 0 }]]
+    },
+    "HTTP — Send Mid-Stay Support Message": {
+      "main": [[{ "node": "Wait — Until Checkout Date", "type": "main", "index": 0 }]]
+    },
+    "Wait — Until Checkout Date": {
+      "main": [[{ "node": "HTTP — Send Thank You + Review Request", "type": "main", "index": 0 }]]
+    },
+    "HTTP — Send Thank You + Review Request": {
+      "main": [[{ "node": "Google Sheets — Tag Guest for Retargeting", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "error-handler-workflow"
+  },
+  "tags": ["client-facing", "guest-journey", "whatsapp", "upsell"],
+  "meta": {
+    "description": "Full guest journey: pre check-in info → upsell offers → mid-stay support → checkout review request → retargeting tag. Uses Wait nodes for time-based triggers. Env vars: WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_ACCESS_TOKEN, ADMIN_PHONE, GOOGLE_SHEET_ID."
+  }
+}
