@@ -474,14 +474,15 @@
     {
       "parameters": {
         "content": "## Webhook watch the latest updates from the ticket then reporting to user",
-        "height": 192
+        "height": 464,
+        "width": 150
       },
       "id": "6aae99df-9c03-451f-b472-99ee2646deee",
       "name": "Sticky Note3",
       "type": "n8n-nodes-base.stickyNote",
       "position": [
-        96,
-        2672
+        192,
+        2400
       ],
       "typeVersion": 1
     },
@@ -1155,7 +1156,7 @@
     "binaryMode": "separate",
     "availableInMCP": false
   },
-  "versionId": "3ce2fdc3-c789-4c5b-9486-86ede7dc1c3a",
+  "versionId": "103bc644-0d62-44a6-9f2a-be4333655476",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "3207cc0bdb382da8c0979a0eb7bde10a910ba8348aa045ae4101f41b0a32d14f"

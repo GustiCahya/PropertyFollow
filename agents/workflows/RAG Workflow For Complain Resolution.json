@@ -1,5 +1,5 @@
 {
-  "name": "RAG Workflow For Company Documents stored in Google Drive",
+  "name": "RAG Workflow For Complain Resolution",
   "nodes": [
     {
       "parameters": {
